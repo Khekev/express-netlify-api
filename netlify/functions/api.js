@@ -1,83 +1,138 @@
-
 import express from "express";
 import serverless from "serverless-http";
 import dotenv from "dotenv";
 import nodemailer from "nodemailer";
-import { getStore } from "@netlify/blobs";
+import { getStore, connectLambda } from "@netlify/blobs";
 
 dotenv.config();
 
 const app = express();
 
-app.use(express.json());
+app.use(express.json({ limit: "10kb" }));
 
-// ======================================
-// NORMALIZAR RUTAS PARA NETLIFY Y LOCAL
-// ======================================
+// ==========================================
+// CONFIGURACIÓN DE RUTAS
+// ==========================================
+// Quita el prefijo /api o /.netlify/functions/api para que Express
+// vea siempre rutas como /metrics, /time, etc.
 
 app.use((req, res, next) => {
-    const prefixes = [
-        "/.netlify/functions/api",
-        "/api"
-    ];
+    let nueva = req.url.replace(
+        /^\/(\.netlify\/functions\/)?api(?=\/|\?|$)/,
+        ""
+    );
 
-    for (const prefix of prefixes) {
-        if (req.url === prefix || req.url.startsWith(prefix + "/")) {
-            req.url = req.url.slice(prefix.length) || "/";
-            break;
-        }
+    if (!nueva.startsWith("/")) {
+        nueva = "/" + nueva;
     }
 
+    req.url = nueva;
     next();
 });
 
-// ======================================
-// GET /api/time
-// CONSULTAR HORA DEL SERVIDOR
-// ======================================
+// ==========================================
+// CONFIGURACIÓN DE NETLIFY BLOBS
+// ==========================================
+// En producción (Netlify) el SDK detecta las credenciales solo,
+// siempre que se llame a connectLambda(event) en el handler.
+// Las variables locales son únicamente un respaldo opcional.
 
-app.get("/time", (req, res) => {
-    const now = new Date();
+function obtenerStore(consistencia = "strong") {
+    const opciones = {
+        name: "funnel-metrics",
+        consistency: consistencia
+    };
 
-    res.status(200).json({
+    const siteID = process.env.NETLIFY_SITE_ID;
+    const token = process.env.NETLIFY_AUTH_TOKEN;
+
+    if (siteID && token) {
+        opciones.siteID = siteID;
+        opciones.token = token;
+    }
+
+    return getStore(opciones);
+}
+
+// Ejecuta una operación sobre el store con consistencia fuerte.
+// Si el entorno no la soporta (por ejemplo, el emulador local, que no
+// entrega "uncachedEdgeURL"), reintenta con consistencia eventual.
+async function conStore(operacion) {
+    try {
+        return await operacion(obtenerStore("strong"));
+    } catch (error) {
+        if (String(error.message).includes("uncachedEdgeURL")) {
+            console.warn(
+                "Consistencia fuerte no disponible en este entorno; usando eventual."
+            );
+            return await operacion(obtenerStore("eventual"));
+        }
+
+        throw error;
+    }
+}
+
+// ==========================================
+// RUTA PRINCIPAL
+// ==========================================
+
+app.get("/", (req, res) => {
+    res.json({
         status: "success",
-        serverTimeISO: now.toISOString(),
-        timestamp: now.getTime(),
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        formatted: now.toLocaleString("es-MX"),
-        platform: process.platform
+        message: "API REST funcionando correctamente",
+        endpoints: [
+            "GET /api/time",
+            "POST /api/send-email",
+            "POST /api/metrics",
+            "GET /api/metrics",
+            "GET /api/metrics/export?format=csv"
+        ]
     });
 });
 
-// ======================================
-// VALIDAR API KEY
-// ======================================
+// ==========================================
+// CONSULTAR HORA DEL SERVIDOR
+// ==========================================
+
+app.get("/time", (req, res) => {
+    res.status(200).json({
+        status: "success",
+        message: "Hora del servidor consultada correctamente",
+        time: new Date().toISOString()
+    });
+});
+
+// ==========================================
+// VALIDACIÓN DE API KEY
+// ==========================================
 
 function validarApiKey(req, res, next) {
     const apiKey = req.headers["x-api-key"];
-    const secretKey = process.env.API_SECRET_KEY;
 
-    if (!secretKey || !apiKey || apiKey !== secretKey) {
+    if (!process.env.API_SECRET_KEY) {
+        return res.status(500).json({
+            status: "error",
+            message: "No se configuró API_SECRET_KEY."
+        });
+    }
+
+    if (apiKey !== process.env.API_SECRET_KEY) {
         return res.status(401).json({
             status: "error",
-            message: "No autorizado. API Key inválida o faltante."
+            message: "API Key incorrecta o no proporcionada."
         });
     }
 
     next();
 }
 
-// ======================================
-// FUNCIONES DE VALIDACIÓN
-// ======================================
-
-function esCorreoValido(correo) {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(correo);
-}
+// ==========================================
+// ESCAPAR HTML
+// ==========================================
 
 function escaparHTML(texto) {
-    return String(texto).replace(/[&<>"']/g, caracter => {
-        const entidades = {
+    return String(texto).replace(/[&<>"']/g, (caracter) => {
+        const equivalencias = {
             "&": "&amp;",
             "<": "&lt;",
             ">": "&gt;",
@@ -85,14 +140,31 @@ function escaparHTML(texto) {
             "'": "&#39;"
         };
 
-        return entidades[caracter];
+        return equivalencias[caracter];
     });
 }
 
-// ======================================
-// POST /api/send-email
-// ENVIAR CORREOS
-// ======================================
+// ==========================================
+// CONFIGURACIÓN DE CORREO
+// ==========================================
+
+function crearTransportador() {
+    const puerto = Number(process.env.SMTP_PORT || 587);
+
+    return nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: puerto,
+        secure: puerto === 465,
+        auth: {
+            user: process.env.SMTP_USER,
+            pass: process.env.SMTP_PASS
+        }
+    });
+}
+
+// ==========================================
+// ENVIAR CORREO ELECTRÓNICO
+// ==========================================
 
 app.post("/send-email", validarApiKey, async (req, res) => {
     try {
@@ -101,65 +173,67 @@ app.post("/send-email", validarApiKey, async (req, res) => {
         if (!to || !subject || !message) {
             return res.status(400).json({
                 status: "error",
-                message: "Faltan campos obligatorios: to, subject y message."
+                message: "Debes proporcionar to, subject y message."
             });
         }
 
-        if (!esCorreoValido(to)) {
+        // Protección contra CRLF Injection en campos que viajan en cabeceras
+        const camposCabecera = [to, subject, senderName];
+
+        if (
+            camposCabecera.some(
+                (valor) =>
+                    valor !== undefined &&
+                    (typeof valor !== "string" || /[\r\n]/.test(valor))
+            )
+        ) {
             return res.status(400).json({
                 status: "error",
-                message: "El correo electrónico del destinatario no es válido."
+                message: "Los campos to, subject y senderName deben ser texto sin saltos de línea."
             });
         }
 
-        const asuntoSeguro = String(subject)
-            .replace(/[\r\n]/g, " ")
-            .trim();
+        const correoValido = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-        const remitenteSeguro = String(senderName || "API Express")
-            .replace(/[\r\n"]/g, " ")
-            .trim();
-
-        if (!asuntoSeguro) {
+        if (!correoValido.test(to)) {
             return res.status(400).json({
                 status: "error",
-                message: "El asunto no puede estar vacío."
+                message: "El correo destinatario no es válido."
             });
         }
 
-        const nombreHTML = escaparHTML(senderName || "Usuario");
-        const mensajeHTML = escaparHTML(message);
+        if (
+            !process.env.SMTP_HOST ||
+            !process.env.SMTP_USER ||
+            !process.env.SMTP_PASS
+        ) {
+            return res.status(500).json({
+                status: "error",
+                message: "Faltan las credenciales SMTP."
+            });
+        }
 
-        const transporter = nodemailer.createTransport({
-            host: process.env.SMTP_HOST,
-            port: Number(process.env.SMTP_PORT),
-            secure: Number(process.env.SMTP_PORT) === 465,
-            auth: {
-                user: process.env.SMTP_USER,
-                pass: process.env.SMTP_PASS
-            }
-        });
+        const transporter = crearTransportador();
 
-        const info = await transporter.sendMail({
-            from: `"${remitenteSeguro}" <${process.env.SMTP_USER}>`,
-            to: to,
-            subject: asuntoSeguro,
-            text: String(message),
+        const nombre = escaparHTML(senderName || "API");
+        const contenido = escaparHTML(message);
+
+        await transporter.sendMail({
+            from: process.env.EMAIL_FROM || process.env.SMTP_USER,
+            to,
+            subject,
+            text: message,
             html: `
-                <div style="font-family: Arial; padding: 20px;">
-                    <h2>Mensaje enviado desde nuestra API</h2>
-                    <p><strong>Remitente:</strong> ${nombreHTML}</p>
-                    <p>${mensajeHTML}</p>
-                    <hr>
-                    <small>Correo enviado mediante Express y Netlify Functions.</small>
+                <div style="font-family: Arial, sans-serif;">
+                    <h2>${nombre}</h2>
+                    <p>${contenido}</p>
                 </div>
             `
         });
 
         return res.status(200).json({
             status: "success",
-            message: "Correo enviado correctamente.",
-            messageId: info.messageId
+            message: "Correo enviado correctamente."
         });
 
     } catch (error) {
@@ -167,85 +241,92 @@ app.post("/send-email", validarApiKey, async (req, res) => {
 
         return res.status(500).json({
             status: "error",
-            message: "No se pudo enviar el correo. Verifica la configuración SMTP."
+            message: "Error al enviar el correo.",
+            details: error.message
         });
     }
 });
 
-// ======================================
-// NETLIFY BLOBS
-// ALMACÉN DE MÉTRICAS
-// ======================================
+// ==========================================
+// OBTENER TODOS LOS EVENTOS
+// ==========================================
 
-function obtenerAlmacenMetricas() {
-    return getStore({
-        name: "funnel-metrics",
-        consistency: "strong"
+async function obtenerEventos() {
+    return conStore(async (store) => {
+        const resultado = await store.list();
+
+        const eventos = await Promise.all(
+            resultado.blobs.map((blob) =>
+                store.get(blob.key, { type: "json" })
+            )
+        );
+
+        return eventos.filter(Boolean);
     });
 }
 
-// Obtener todos los eventos guardados
-
-async function obtenerEventos() {
-    const store = obtenerAlmacenMetricas();
-    const { blobs } = await store.list();
-
-    const eventos = await Promise.all(
-        blobs.map(async (blob) => {
-            return await store.get(blob.key, {
-                type: "json"
-            });
-        })
-    );
-
-    return eventos.filter(Boolean);
-}
-
-// ======================================
-// POST /api/metrics
-// REGISTRAR UNA MÉTRICA
-// ======================================
+// ==========================================
+// REGISTRAR MÉTRICA (POST /api/metrics)
+// ==========================================
 
 app.post("/metrics", async (req, res) => {
     try {
-        const { step, source, sessionId, metadata } = req.body || {};
+        const { step, source, sessionId, metadata } = req.body;
 
-        if (
-            typeof step !== "string" ||
-            !step.trim() ||
-            typeof source !== "string" ||
-            !source.trim()
-        ) {
+        if (typeof step !== "string" || typeof source !== "string") {
             return res.status(400).json({
                 status: "error",
-                message: "Los campos step y source son obligatorios."
+                message: 'Los campos "step" y "source" son obligatorios y deben ser texto.'
             });
         }
 
-        const randomSuffix = Math.random()
-            .toString(36)
-            .substring(2, 7);
+        const stepLimpio = step.toLowerCase().trim();
+        const sourceLimpio = source.toLowerCase().trim();
 
-        const eventId = `metric_${Date.now()}_${randomSuffix}`;
-        const timestamp = new Date().toISOString();
+        if (!stepLimpio || !sourceLimpio) {
+            return res.status(400).json({
+                status: "error",
+                message: 'Los campos "step" y "source" no pueden estar vacíos.'
+            });
+        }
 
-        const metricRecord = {
-            id: eventId,
-            step: step.toLowerCase().trim(),
-            source: source.toLowerCase().trim(),
-            sessionId: sessionId || "anon_guest",
-            metadata: metadata && typeof metadata === "object" ? metadata : {},
-            timestamp
+        if (stepLimpio.length > 50 || sourceLimpio.length > 50) {
+            return res.status(400).json({
+                status: "error",
+                message: "step y source no pueden exceder 50 caracteres."
+            });
+        }
+
+        const metadataValida =
+            metadata &&
+            typeof metadata === "object" &&
+            !Array.isArray(metadata) &&
+            JSON.stringify(metadata).length <= 2000;
+
+        const id =
+            "metric_" +
+            Date.now() +
+            "_" +
+            Math.random().toString(36).substring(2, 7);
+
+        const nuevaMetrica = {
+            id,
+            step: stepLimpio,
+            source: sourceLimpio,
+            sessionId:
+                typeof sessionId === "string" && sessionId.trim()
+                    ? sessionId.trim().slice(0, 100)
+                    : "anon_guest",
+            metadata: metadataValida ? metadata : {},
+            timestamp: new Date().toISOString()
         };
 
-        const store = obtenerAlmacenMetricas();
-
-        await store.setJSON(eventId, metricRecord);
+        await conStore((store) => store.setJSON(id, nuevaMetrica));
 
         return res.status(201).json({
             status: "success",
-            message: "Métrica guardada correctamente.",
-            data: metricRecord
+            message: "Métrica persistida correctamente en Netlify Blobs.",
+            data: nuevaMetrica
         });
 
     } catch (error) {
@@ -253,39 +334,38 @@ app.post("/metrics", async (req, res) => {
 
         return res.status(500).json({
             status: "error",
-            message: "Error al guardar la métrica.",
+            message: "Fallo interno al persistir la métrica.",
             details: error.message
         });
     }
 });
 
-// ======================================
-// GET /api/metrics
-// CONSULTAR Y FILTRAR MÉTRICAS
-// ======================================
+// ==========================================
+// CONSULTAR MÉTRICAS (GET /api/metrics)
+// Filtros opcionales: ?step=...&source=...&limit=...
+// ==========================================
 
 app.get("/metrics", async (req, res) => {
     try {
-        const { step, source } = req.query;
-
         let eventos = await obtenerEventos();
 
+        const step = String(req.query.step || "").toLowerCase().trim();
+        const source = String(req.query.source || "").toLowerCase().trim();
+
         if (step) {
-            eventos = eventos.filter(evento =>
-                evento.step === String(step).toLowerCase().trim()
-            );
+            eventos = eventos.filter((e) => e.step === step);
         }
 
         if (source) {
-            eventos = eventos.filter(evento =>
-                evento.source === String(source).toLowerCase().trim()
-            );
+            eventos = eventos.filter((e) => e.source === source);
         }
 
-        eventos.sort((a, b) =>
-            new Date(b.timestamp) - new Date(a.timestamp)
+        // Más recientes primero
+        eventos.sort(
+            (a, b) => new Date(b.timestamp) - new Date(a.timestamp)
         );
 
+        // Resumen calculado sobre TODOS los eventos filtrados
         const summary = {
             totalEvents: eventos.length,
             byStep: {},
@@ -300,11 +380,17 @@ app.get("/metrics", async (req, res) => {
                 (summary.bySource[evento.source] || 0) + 1;
         }
 
+        // La lista se limita para no devolver miles de registros
+        const limite = Math.min(
+            Math.max(Number(req.query.limit) || 50, 1),
+            200
+        );
+
         return res.status(200).json({
             status: "success",
             data: {
                 summary,
-                recentEvents: eventos.slice(0, 50)
+                recentEvents: eventos.slice(0, limite)
             }
         });
 
@@ -313,22 +399,33 @@ app.get("/metrics", async (req, res) => {
 
         return res.status(500).json({
             status: "error",
-            message: "Error al consultar las métricas.",
+            message: "Fallo interno al consultar métricas en Netlify Blobs.",
             details: error.message
         });
     }
 });
 
-// ======================================
-// GET /api/metrics/export?format=csv
+// ==========================================
 // EXPORTAR MÉTRICAS A CSV
-// ======================================
+// GET /api/metrics/export?format=csv
+// ==========================================
+
+function escaparCSV(valor) {
+    let texto = String(valor ?? "");
+
+    // Evita inyección de fórmulas al abrir en Excel / Sheets
+    if (/^[=+\-@]/.test(texto)) {
+        texto = "'" + texto;
+    }
+
+    return `"${texto.replace(/"/g, '""')}"`;
+}
 
 app.get("/metrics/export", async (req, res) => {
     try {
-        const { format } = req.query;
+        const formato = req.query.format || "csv";
 
-        if (format !== "csv") {
+        if (formato !== "csv") {
             return res.status(400).json({
                 status: "error",
                 message: "Formato no válido. Utiliza format=csv."
@@ -337,42 +434,25 @@ app.get("/metrics/export", async (req, res) => {
 
         const eventos = await obtenerEventos();
 
-        const encabezados = [
-            "id",
-            "step",
-            "source",
-            "sessionId",
-            "timestamp"
-        ];
+        eventos.sort(
+            (a, b) => new Date(b.timestamp) - new Date(a.timestamp)
+        );
 
-        const filas = eventos.map(evento => [
-            evento.id,
-            evento.step,
-            evento.source,
-            evento.sessionId,
-            evento.timestamp
-        ]);
+        const encabezados = ["id", "step", "source", "sessionId", "timestamp"];
 
-        function escaparCSV(valor) {
-            const texto = String(valor ?? "");
-            return `"${texto.replace(/"/g, '""')}"`;
-        }
+        const filas = eventos.map((evento) =>
+            encabezados.map((campo) => escaparCSV(evento[campo])).join(",")
+        );
 
-        const contenidoCSV = [
-            encabezados,
-            ...filas
-        ]
-            .map(fila => fila.map(escaparCSV).join(","))
-            .join("\n");
+        const csv = [encabezados.join(","), ...filas].join("\n");
 
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
-
         res.setHeader(
             "Content-Disposition",
             'attachment; filename="metricas_funnel.csv"'
         );
 
-        return res.status(200).send("\uFEFF" + contenidoCSV);
+        return res.status(200).send("\uFEFF" + csv);
 
     } catch (error) {
         console.error("Error al exportar CSV:", error);
@@ -385,8 +465,55 @@ app.get("/metrics/export", async (req, res) => {
     }
 });
 
-// ======================================
-// EXPORTAR FUNCIÓN PARA NETLIFY
-// ======================================
+// ==========================================
+// RUTAS NO ENCONTRADAS
+// ==========================================
 
-export const handler = serverless(app);
+app.use((req, res) => {
+    res.status(404).json({
+        status: "error",
+        message: "Ruta no encontrada.",
+        path: req.path
+    });
+});
+
+// ==========================================
+// MANEJO GENERAL DE ERRORES
+// ==========================================
+
+app.use((error, req, res, next) => {
+    // JSON malformado o demasiado grande → error del cliente, no del servidor
+    if (error.type === "entity.parse.failed") {
+        return res.status(400).json({
+            status: "error",
+            message: "El cuerpo de la petición no es un JSON válido."
+        });
+    }
+
+    if (error.type === "entity.too.large") {
+        return res.status(413).json({
+            status: "error",
+            message: "El cuerpo de la petición es demasiado grande."
+        });
+    }
+
+    console.error("Error general:", error);
+
+    res.status(500).json({
+        status: "error",
+        message: "Ocurrió un error interno en la API."
+    });
+});
+
+// ==========================================
+// EXPORTAR FUNCIÓN NETLIFY
+// ==========================================
+
+const manejadorExpress = serverless(app);
+
+export const handler = async (event, context) => {
+    // Conecta Netlify Blobs con el entorno de esta ejecución
+    connectLambda(event);
+
+    return manejadorExpress(event, context);
+};

@@ -1,7 +1,6 @@
 
 <!DOCTYPE html>
 <html lang="es">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -36,9 +35,14 @@
         }
 
         #resultado {
-            margin-top: 20px;
+            margin: 20px auto;
+            max-width: 800px;
             white-space: pre-wrap;
             text-align: left;
+            background: #262626;
+            padding: 20px;
+            border-radius: 8px;
+            overflow-wrap: anywhere;
         }
     </style>
 </head>
@@ -61,6 +65,16 @@
         Registrar Interacción
     </button>
 
+    <button onclick="registrarMetrica('bofu_cross_promo')">
+        Registrar Clic a Aliado
+    </button>
+
+    <button onclick="registrarMetrica('feedback_submission')">
+        Registrar Feedback
+    </button>
+
+    <br>
+
     <button onclick="consultarMetricas()">
         Consultar Métricas
     </button>
@@ -69,136 +83,135 @@
         Descargar CSV
     </button>
 
-    <div id="resultado"></div>
+    <div id="resultado">Esperando acción...</div>
 
     <script>
+        // ==================================
+        // IDENTIFICAR SESIÓN
+        // ==================================
 
-        // ---------------------------------------
-        // Crear o recuperar el ID de sesión
-        // ---------------------------------------
+        let sessionId = null;
 
-        let sessionId = sessionStorage.getItem('demo_session_id');
+        try {
+            sessionId = sessionStorage.getItem("demo_session_id");
 
-        if (!sessionId) {
-
-            sessionId = crypto.randomUUID();
-
-            sessionStorage.setItem(
-                'demo_session_id',
-                sessionId
-            );
+            if (!sessionId) {
+                sessionId = crypto.randomUUID();
+                sessionStorage.setItem("demo_session_id", sessionId);
+            }
+        } catch (error) {
+            // Si el navegador bloquea el almacenamiento, se usa un ID temporal
+            sessionId = sessionId || "anon_" + Date.now();
         }
 
-        // ---------------------------------------
-        // Obtener parámetros UTM
-        // ---------------------------------------
+        // ==================================
+        // OBTENER PARÁMETROS UTM
+        // ==================================
 
-        const parametrosURL = new URLSearchParams(
-            window.location.search
-        );
+        const parametrosURL = new URLSearchParams(window.location.search);
 
-        const utmSource = parametrosURL.get('utm_source') || 'directo';
+        const utmSource = parametrosURL.get("utm_source") || "directo";
+        const utmMedium = parametrosURL.get("utm_medium") || "ninguno";
+        const utmCampaign = parametrosURL.get("utm_campaign") || "ninguna";
 
-        const utmMedium = parametrosURL.get('utm_medium') || 'ninguno';
+        // ==================================
+        // TIPO DE DISPOSITIVO
+        // ==================================
 
-        const utmCampaign = parametrosURL.get('utm_campaign') || 'ninguna';
+        function tipoDispositivo() {
+            return /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)
+                ? "mobile"
+                : "desktop";
+        }
 
-        // ---------------------------------------
-        // Registrar métricas
-        // ---------------------------------------
+        // ==================================
+        // MOSTRAR RESULTADOS (solo para pruebas)
+        // ==================================
 
-        async function registrarMetrica(paso) {
+        function mostrarResultado(resultado) {
+            document.getElementById("resultado").textContent =
+                JSON.stringify(resultado, null, 2);
+        }
 
+        // ==================================
+        // ENVIAR MÉTRICA (silencioso y no bloqueante)
+        // ==================================
+
+        async function enviarMetrica(paso) {
             try {
-
-                const respuesta = await fetch('/api/metrics', {
-
-                    method: 'POST',
-
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-
+                const respuesta = await fetch("/api/metrics", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
-
                         step: paso,
-
                         source: utmSource,
-
                         sessionId: sessionId,
-
                         metadata: {
-
                             utm_source: utmSource,
-
                             utm_medium: utmMedium,
-
                             utm_campaign: utmCampaign,
-
-                            device: navigator.userAgent
-
+                            device: tipoDispositivo()
                         }
-
                     }),
-
-                    keepalive: true
-
+                    keepalive: true // La petición termina aunque el usuario cambie de página
                 });
 
-                const resultado = await respuesta.json();
-
-                document.getElementById('resultado').textContent =
-                    JSON.stringify(resultado, null, 2);
+                return await respuesta.json();
 
             } catch (error) {
-
-                console.warn('No se pudo registrar la métrica:', error);
-
+                console.warn("Telemetría no enviada:", error);
+                return {
+                    status: "error",
+                    message: "No se pudo registrar la métrica.",
+                    details: error.message
+                };
             }
         }
 
-        // ---------------------------------------
-        // Registrar visita al cargar la página
-        // ---------------------------------------
+        // ==================================
+        // REGISTRAR MÉTRICA DESDE LOS BOTONES
+        // ==================================
 
-        window.addEventListener('DOMContentLoaded', () => {
+        async function registrarMetrica(paso) {
+            const resultado = await enviarMetrica(paso);
+            mostrarResultado(resultado);
+        }
 
-            registrarMetrica('mofu_landing');
-
-        });
-
-        // ---------------------------------------
-        // Consultar métricas
-        // ---------------------------------------
+        // ==================================
+        // CONSULTAR MÉTRICAS
+        // ==================================
 
         async function consultarMetricas() {
-
             try {
-
-                const respuesta = await fetch('/api/metrics');
-
+                const respuesta = await fetch("/api/metrics");
                 const resultado = await respuesta.json();
 
-                document.getElementById('resultado').textContent =
-                    JSON.stringify(resultado, null, 2);
+                mostrarResultado(resultado);
 
             } catch (error) {
-
-                console.error(error);
-
+                mostrarResultado({
+                    status: "error",
+                    message: "No se pudieron consultar las métricas.",
+                    details: error.message
+                });
             }
         }
 
-        // ---------------------------------------
-        // Exportar CSV
-        // ---------------------------------------
+        // ==================================
+        // EXPORTAR CSV
+        // ==================================
 
         function exportarCSV() {
-
-            window.location.href = '/api/metrics/export?format=csv';
-
+            window.location.href = "/api/metrics/export?format=csv";
         }
 
+        // ==================================
+        // REGISTRAR VISITA AUTOMÁTICA (sin mostrar nada al usuario)
+        // ==================================
+
+        window.addEventListener("DOMContentLoaded", () => {
+            enviarMetrica("mofu_landing");
+        });
     </script>
 
 </body>

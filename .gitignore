@@ -1,5 +1,13 @@
 node_modules/
-.env
 .netlify/
-.vscode/
+
+# Variables de entorno (nunca subir credenciales)
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
 .DS_Store
