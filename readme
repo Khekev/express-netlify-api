@@ -1,0 +1,134 @@
+# Motor de Telemetría y Métricas de Funnel
+
+## 1. Información general
+
+| Campo | Descripción |
+|---|---|
+| Nombre del proyecto | Motor de Telemetría y Métricas de Funnel |
+| Descripción | API REST para registrar, almacenar, consultar y exportar eventos de telemetría. |
+| Lenguaje | JavaScript |
+| Entorno | Node.js |
+| Framework | Express.js |
+| Almacenamiento | Netlify Blobs |
+| Despliegue | Netlify Functions |
+| Pruebas | Postman |
+| Universidad | Universidad Amerike |
+| Año | 2026 |
+
+## 2. Tecnologías utilizadas
+
+| Tecnología | Función |
+|---|---|
+| Node.js | Entorno de ejecución |
+| Express.js | Creación de la API REST |
+| Netlify Functions | Ejecución de funciones en la nube |
+| Netlify Blobs | Almacenamiento de eventos |
+| Nodemailer | Envío de correos electrónicos |
+| HTML | Estructura de la interfaz |
+| JavaScript | Funcionalidad del sistema |
+| Postman | Pruebas de los endpoints |
+
+## 3. Estructura del proyecto
+
+| Archivo o carpeta | Descripción |
+|---|---|
+| `netlify/functions/api.js` | Contiene las rutas y la lógica de la API. |
+| `public/index.html` | Interfaz para registrar y consultar métricas. |
+| `.env` | Variables de entorno y credenciales privadas. |
+| `.env.example` | Plantilla de variables de entorno. |
+| `.gitignore` | Archivos que no deben subirse a GitHub. |
+| `netlify.toml` | Configuración de Netlify. |
+| `package.json` | Dependencias y comandos del proyecto. |
+| `README.md` | Documentación del proyecto. |
+
+## 4. Funcionalidades principales
+
+| Funcionalidad | Descripción |
+|---|---|
+| Registro de eventos | Guarda eventos de las etapas del funnel. |
+| Session ID | Identifica las sesiones de los usuarios. |
+| Parámetros UTM | Registra la fuente de procedencia del usuario. |
+| Netlify Blobs | Almacena los eventos registrados. |
+| Consulta de métricas | Muestra los eventos y estadísticas. |
+| Filtros | Permite filtrar por etapa y fuente. |
+| Exportación CSV | Descarga los registros en formato CSV. |
+| Envío de correos | Permite enviar correos mediante SMTP. |
+| API Key | Protege el endpoint de envío de correos. |
+
+## 5. Endpoints de la API
+
+| Método | Endpoint | Descripción |
+|---|---|---|
+| GET | `/api/` | Muestra información de la API. |
+| GET | `/api/time` | Consulta la hora del servidor. |
+| POST | `/api/metrics` | Registra un evento. |
+| GET | `/api/metrics` | Consulta las métricas registradas. |
+| GET | `/api/metrics/export?format=csv` | Exporta las métricas en CSV. |
+| POST | `/api/send-email` | Envía un correo electrónico. |
+
+## 6. Parámetros de telemetría
+
+| Parámetro | Descripción |
+|---|---|
+| `step` | Etapa del funnel. |
+| `source` | Fuente de procedencia del usuario. |
+| `sessionId` | Identificador de sesión. |
+| `metadata` | Información adicional del evento. |
+| `timestamp` | Fecha y hora del registro. |
+
+## 7. Instalación y ejecución
+
+| Paso | Comando o acción |
+|---|---|
+| 1. Clonar repositorio | `git clone URL_DEL_REPOSITORIO` |
+| 2. Entrar al proyecto | `cd metrics-netlify-blobs-api` |
+| 3. Instalar dependencias | `npm install` |
+| 4. Configurar variables | Crear el archivo `.env` |
+| 5. Ejecutar proyecto | `npm run dev` |
+| 6. Abrir aplicación | `http://localhost:8888` |
+
+## 8. Variables de entorno
+
+| Variable | Descripción |
+|---|---|
+| `API_SECRET_KEY` | Clave de autenticación de la API. |
+| `SMTP_HOST` | Servidor SMTP. |
+| `SMTP_PORT` | Puerto del servidor SMTP. |
+| `SMTP_USER` | Correo electrónico emisor. |
+| `SMTP_PASS` | Contraseña de aplicación SMTP. |
+| `EMAIL_FROM` | Dirección del remitente. |
+
+**Importante:** El archivo `.env` contiene información privada y no debe subirse a GitHub.
+
+## 9. Pruebas realizadas con Postman
+
+| Prueba | Resultado esperado |
+|---|---|
+| Consultar hora | Respuesta HTTP 200. |
+| Registrar evento válido | Respuesta HTTP 201. |
+| Registrar evento sin información obligatoria | Respuesta HTTP 400. |
+| Consultar métricas | Respuesta HTTP 200. |
+| Filtrar por etapa y fuente | Mostrar eventos correspondientes. |
+| Exportar CSV | Descargar archivo CSV. |
+| Enviar correo | Confirmar envío correcto. |
+
+## 10. Despliegue
+
+| Campo | Información |
+|---|---|
+| Plataforma | Netlify |
+| Servicio | Netlify Functions |
+| Base de datos de eventos | Netlify Blobs |
+| URL de producción | https://express-netlify-api1.netlify.app |
+
+## 11. Autor
+
+| Campo | Información |
+|---|---|
+| Proyecto | Motor de Telemetría y Métricas de Funnel |
+| Institución | Universidad Amerike |
+| Año | 2026 |
+## 13. Enlaces
+
+- **GitHub:** https://github.com/Khekev/express-netlify-api
+- **Sitio en Netlify:** https://express-netlify-api1.netlify.app
