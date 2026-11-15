@@ -1,16 +1,17 @@
 
 {
-  "name": "express-netlify-api",
+  "name": "metrics-netlify-blobs-api",
   "version": "1.0.0",
-  "description": "REST API con Express y Netlify Functions",
+  "description": "API REST de telemetría con Express, Netlify Functions y Blobs",
   "type": "module",
   "scripts": {
     "dev": "netlify dev",
     "start": "netlify dev"
   },
   "dependencies": {
-    "dotenv": "^16.4.7",
-    "express": "^4.21.2",
+    "@netlify/blobs": "^11.1.9",
+    "dotenv": "^16.6.1",
+    "express": "^4.22.3",
     "nodemailer": "^6.10.0",
     "serverless-http": "^3.2.0"
   },

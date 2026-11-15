@@ -1,0 +1,205 @@
+
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Motor de Métricas</title>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #171717;
+            color: white;
+            text-align: center;
+            padding: 40px;
+        }
+
+        h1 {
+            color: #8b5cf6;
+        }
+
+        button {
+            background: #8b5cf6;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            margin: 10px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #6d28d9;
+        }
+
+        #resultado {
+            margin-top: 20px;
+            white-space: pre-wrap;
+            text-align: left;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>Motor de Métricas</h1>
+
+    <p>Prueba de telemetría con Netlify Blobs</p>
+
+    <button onclick="registrarMetrica('tofu_attraction')">
+        Registrar Atracción
+    </button>
+
+    <button onclick="registrarMetrica('mofu_landing')">
+        Registrar Visita
+    </button>
+
+    <button onclick="registrarMetrica('bofu_interaction')">
+        Registrar Interacción
+    </button>
+
+    <button onclick="consultarMetricas()">
+        Consultar Métricas
+    </button>
+
+    <button onclick="exportarCSV()">
+        Descargar CSV
+    </button>
+
+    <div id="resultado"></div>
+
+    <script>
+
+        // ---------------------------------------
+        // Crear o recuperar el ID de sesión
+        // ---------------------------------------
+
+        let sessionId = sessionStorage.getItem('demo_session_id');
+
+        if (!sessionId) {
+
+            sessionId = crypto.randomUUID();
+
+            sessionStorage.setItem(
+                'demo_session_id',
+                sessionId
+            );
+        }
+
+        // ---------------------------------------
+        // Obtener parámetros UTM
+        // ---------------------------------------
+
+        const parametrosURL = new URLSearchParams(
+            window.location.search
+        );
+
+        const utmSource = parametrosURL.get('utm_source') || 'directo';
+
+        const utmMedium = parametrosURL.get('utm_medium') || 'ninguno';
+
+        const utmCampaign = parametrosURL.get('utm_campaign') || 'ninguna';
+
+        // ---------------------------------------
+        // Registrar métricas
+        // ---------------------------------------
+
+        async function registrarMetrica(paso) {
+
+            try {
+
+                const respuesta = await fetch('/api/metrics', {
+
+                    method: 'POST',
+
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+
+                    body: JSON.stringify({
+
+                        step: paso,
+
+                        source: utmSource,
+
+                        sessionId: sessionId,
+
+                        metadata: {
+
+                            utm_source: utmSource,
+
+                            utm_medium: utmMedium,
+
+                            utm_campaign: utmCampaign,
+
+                            device: navigator.userAgent
+
+                        }
+
+                    }),
+
+                    keepalive: true
+
+                });
+
+                const resultado = await respuesta.json();
+
+                document.getElementById('resultado').textContent =
+                    JSON.stringify(resultado, null, 2);
+
+            } catch (error) {
+
+                console.warn('No se pudo registrar la métrica:', error);
+
+            }
+        }
+
+        // ---------------------------------------
+        // Registrar visita al cargar la página
+        // ---------------------------------------
+
+        window.addEventListener('DOMContentLoaded', () => {
+
+            registrarMetrica('mofu_landing');
+
+        });
+
+        // ---------------------------------------
+        // Consultar métricas
+        // ---------------------------------------
+
+        async function consultarMetricas() {
+
+            try {
+
+                const respuesta = await fetch('/api/metrics');
+
+                const resultado = await respuesta.json();
+
+                document.getElementById('resultado').textContent =
+                    JSON.stringify(resultado, null, 2);
+
+            } catch (error) {
+
+                console.error(error);
+
+            }
+        }
+
+        // ---------------------------------------
+        // Exportar CSV
+        // ---------------------------------------
+
+        function exportarCSV() {
+
+            window.location.href = '/api/metrics/export?format=csv';
+
+        }
+
+    </script>
+
+</body>
+</html>
