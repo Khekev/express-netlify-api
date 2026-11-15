@@ -2,7 +2,7 @@
 
 ## 1. Descripción
 
-API REST desarrollada con Express.js y desplegada como Netlify Function. Registra y consulta eventos de telemetría del funnel de conversión del proyecto final (Funnel y Demo Day), desde el escaneo del QR hasta el envío del formulario de feedback.
+API REST desarrollada con Express.js y desplegada como Netlify Function. Registra y consulta eventos de telemetría del funnel de conversión del proyecto final (Funnel y Demo Day), desde el escaneo del código QR hasta el envío del formulario de feedback.
 
 Los eventos se almacenan de forma persistente con **Netlify Blobs**, en la tienda `funnel-metrics`. La API también incluye consulta de hora del servidor y envío de correos protegido con API Key.
 
@@ -27,13 +27,19 @@ express-netlify-api/
 |-- public/
 |   `-- index.html          # Frontend de prueba de telemetría
 |-- evidencias/             # Capturas de Postman y panel de Netlify
-|-- .env.example            # Plantilla de variables
+|-- .env.example            # Plantilla de variables de entorno
 |-- .gitignore
 |-- netlify.toml            # Build y reescritura de rutas
 |-- package.json
 |-- telemetria_netlify_blobs.postman_collection.json
 `-- README.md
 ```
+
+### Notas de implementación
+
+- **Patrón Adapter:** `serverless-http` adapta la aplicación Express al formato de Netlify Functions. Un redirect en `netlify.toml` (`/api/*` → `/.netlify/functions/api/:splat`) mantiene las URLs públicas limpias.
+- **Conexión con Blobs:** como la función usa el formato clásico (`handler(event, context)`), el handler llama a `connectLambda(event)` en cada ejecución para que el SDK de Blobs reciba su configuración del entorno. En Netlify no se necesita ningún token manual.
+- **Consistencia:** el almacén se abre con `consistency: "strong"`. Si el entorno no la soporta (por ejemplo, el emulador local, que no entrega la URL necesaria), el código reintenta con consistencia eventual y deja un aviso en consola.
 
 ## 4. Endpoints
 
@@ -49,7 +55,7 @@ express-netlify-api/
 
 ### POST /api/metrics
 
-Cuerpo de la petición:
+Cuerpo de la petición (`Content-Type: application/json`):
 
 ```json
 {
@@ -63,7 +69,9 @@ Cuerpo de la petición:
 - `step` y `source` son obligatorios; si faltan o están vacíos, responde `400 Bad Request`.
 - Si no llega `sessionId`, se asigna `anon_guest`.
 - Cada evento recibe una clave única `metric_<timestamp>_<aleatorio>` y un timestamp ISO.
-- Responde `201 Created` con el evento almacenado.
+- Se persiste con `store.setJSON()` y responde `201 Created` con el evento almacenado.
+
+Fases recomendadas para `step`: `tofu_attraction`, `mofu_landing`, `bofu_interaction`, `bofu_cross_promo` y `feedback_submission`.
 
 ### GET /api/metrics
 
@@ -99,7 +107,7 @@ El resumen se calcula sobre todos los eventos que cumplan los filtros. La lista 
 - Protección contra CRLF Injection en los campos que viajan en cabeceras de correo.
 - Escape de HTML en el contenido de los correos.
 - Escape de CSV y neutralización de fórmulas en la exportación.
-- Credenciales en variables de entorno; `.env` está excluido del repositorio.
+- Credenciales en variables de entorno; `.env` está excluido del repositorio y solo se sube `.env.example`.
 
 ## 7. Preguntas teóricas de reflexión arquitectónica
 
@@ -123,7 +131,9 @@ Para ingesta rápida de eventos independientes y semiestructurados, un almacén 
 
 Con **consistencia fuerte**, después de que una escritura se confirma, cualquier lectura posterior devuelve el dato actualizado, sin importar qué nodo la atienda. Con **consistencia eventual**, las réplicas se sincronizan con un pequeño retraso: durante ese lapso una lectura puede devolver datos desactualizados, y solo después de un tiempo todas coinciden.
 
-En el panel de métricas con consistencia eventual y mucho tráfico concurrente, un evento recién registrado podría no aparecer aún en `store.list()` o en `store.get()`. El contador total y el resumen por fase quedarían momentáneamente por debajo de la realidad, y dos consultas seguidas podrían mostrar cifras distintas. Los datos no se perderían: el panel solo mostraría un estado ligeramente atrasado. Se usa `strong` para que el panel refleje lo último registrado, a cambio de algo más de latencia.
+En el panel de métricas con consistencia eventual y mucho tráfico concurrente, un evento recién registrado podría no aparecer aún en `store.list()` o en `store.get()`. El contador total y el resumen por fase quedarían momentáneamente por debajo de la realidad, y dos consultas seguidas podrían mostrar cifras distintas. Los datos no se perderían: el panel solo mostraría un estado ligeramente atrasado. Se solicita `strong` para que el panel refleje lo último registrado, a cambio de algo más de latencia.
+
+En este proyecto, el emulador local no soporta lecturas con consistencia fuerte, por lo que el código reintenta con consistencia eventual solo en ese caso. En desarrollo local da igual, porque hay un único proceso; en producción se busca usar `strong`.
 
 **3. Garantía de envío en frontend (`keepalive` y `navigator.sendBeacon`)**
 
@@ -163,13 +173,13 @@ Técnicas para reducirlos:
 - **Sanitización al mostrar y exportar:** escape de HTML y de CSV, como ya se hace aquí.
 - **Monitoreo:** alertas ante picos anormales de eventos.
 
-## 8. Instalación y ejecución
+## 8. Instalación y ejecución local
 
 ```bash
 npm install
 ```
 
-Copia `.env.example` como `.env` y completa los valores que necesites (solo `/api/send-email` los usa). Netlify Blobs funciona sin token en local gracias al emulador.
+Copia `.env.example` como `.env` y completa los valores que necesites. Solo `/api/send-email` los usa. Netlify Blobs funciona sin token en local gracias al emulador, así que **no** definas `NETLIFY_SITE_ID` ni `NETLIFY_AUTH_TOKEN`.
 
 ```bash
 npm run dev
@@ -177,16 +187,36 @@ npm run dev
 
 La aplicación queda disponible en `http://localhost:8888`.
 
-## 9. Pruebas con Postman
+## 9. Variables de entorno
+
+| Variable | Uso |
+|---|---|
+| `API_SECRET_KEY` | Clave para proteger `POST /api/send-email`. |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` | Servidor de correo para `/api/send-email`. |
+| `EMAIL_FROM` | Remitente de los correos (opcional). |
+
+Netlify Blobs no requiere variables manuales: en producción el SDK obtiene las credenciales de la plataforma.
+
+## 10. Despliegue en Netlify
+
+1. Conectar el repositorio de GitHub a Netlify.
+2. Netlify detecta `netlify.toml` y las funciones en `netlify/functions/`.
+3. Configurar en **Site configuration → Environment variables** las variables de la sección anterior que se necesiten.
+4. Verificar que la tienda `funnel-metrics` aparezca en la sección **Blobs** del panel.
+
+## 11. Pruebas con Postman
 
 La colección `telemetria_netlify_blobs.postman_collection.json` contiene:
 
 - `POST /api/metrics` con un evento de atracción (`step: "tofu_attraction"`, `source: "qr_campus"`).
 - `POST /api/metrics` con un evento de conversión (`step: "bofu_interaction"`).
+- Dos peticiones de error (`400`): falta `source` y campos vacíos.
 - `GET /api/metrics` para consultar el resumen y la lista de eventos.
-- Pruebas de filtros, exportación CSV, consulta de hora y envío de correo.
+- Filtros por paso y por fuente, exportación CSV, consulta de hora y envío de correo.
 
-## 10. Evidencias
+La variable `baseUrl` de la colección apunta a la URL pública de Netlify.
+
+## 12. Evidencias
 
 > Ajusta los nombres de archivo a los de tus capturas en la carpeta `evidencias/`.
 
@@ -202,7 +232,7 @@ La colección `telemetria_netlify_blobs.postman_collection.json` contiene:
 
 ![Netlify Blobs](evidencias/netlify-blobs.png)
 
-## 11. Enlaces
+## 13. Enlaces
 
 - **GitHub:** https://github.com/Khekev/express-netlify-api
 - **Sitio en Netlify:** https://express-netlify-api1.netlify.app/
