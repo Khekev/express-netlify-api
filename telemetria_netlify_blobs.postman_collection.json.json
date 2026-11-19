@@ -267,7 +267,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"to\": \"destinatario@ejemplo.com\",\n  \"subject\": \"Prueba de API\",\n  \"message\": \"Este es un correo de prueba.\",\n  \"senderName\": \"Mi API\"\n}"
+          "raw": "{\n  \"to\": \"edomex10@amerike.edu.mx\",\n  \"subject\": \"Prueba de API\",\n  \"message\": \"Este es un correo de prueba.\",\n  \"senderName\": \"Mi API\"\n}"
         },
         "url": "{{baseUrl}}/api/send-email"
       }
